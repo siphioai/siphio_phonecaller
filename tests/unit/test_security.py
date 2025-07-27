@@ -83,22 +83,79 @@ class TestEncryptionManager:
     @patch('app.core.security_utils.logger')
     def test_development_key_generation(self, mock_logger, mock_settings):
         """Test that development generates temporary key with warning"""
+        import os
+        import tempfile
+        
         mock_settings.IS_PRODUCTION = False
         mock_settings.ENCRYPTION_KEY = "your-encryption-key-here-change-in-production"
         
-        # Should not raise an error in development
-        manager = EncryptionManager()
+        # Use a temp file for testing
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.dev-key') as f:
+            temp_key_file = f.name
         
-        # Should log warning about temporary key
-        mock_logger.warning.assert_called()
-        warning_message = mock_logger.warning.call_args[0][0]
-        assert "temporary encryption key" in warning_message
-        assert "Generate with:" in warning_message
+        # Patch the dev key file path
+        with patch('app.core.security_utils.os.path.exists') as mock_exists:
+            with patch('builtins.open', create=True) as mock_open:
+                mock_exists.return_value = False  # First run, no cached key
+                
+                # Configure mock file operations
+                mock_file = mock_open.return_value.__enter__.return_value
+                mock_file.read.return_value = ""
+                
+                # Should not raise an error in development
+                manager = EncryptionManager()
+                
+                # Should log warning about temporary key
+                mock_logger.warning.assert_called()
+                warning_message = mock_logger.warning.call_args[0][0]
+                assert "temporary encryption key" in warning_message.lower()
+                assert "cached for this project" in warning_message
+                
+                # Should be able to encrypt/decrypt with generated key
+                encrypted = manager.encrypt("test data")
+                decrypted = manager.decrypt(encrypted)
+                assert decrypted == "test data"
         
-        # Should be able to encrypt/decrypt with generated key
-        encrypted = manager.encrypt("test data")
-        decrypted = manager.decrypt(encrypted)
-        assert decrypted == "test data"
+        # Clean up
+        if os.path.exists(temp_key_file):
+            os.unlink(temp_key_file)
+    
+    @patch('app.core.config.settings')
+    @patch('app.core.security_utils.logger')
+    def test_development_key_persistence(self, mock_logger, mock_settings):
+        """Test that development key persists across restarts"""
+        mock_settings.IS_PRODUCTION = False
+        mock_settings.ENCRYPTION_KEY = "your-encryption-key-here-change-in-production"
+        
+        # Generate a test key
+        from cryptography.fernet import Fernet
+        test_key = Fernet.generate_key().decode()
+        
+        # Mock file operations to simulate cached key
+        with patch('app.core.security_utils.os.path.exists') as mock_exists:
+            with patch('builtins.open', create=True) as mock_open:
+                mock_exists.return_value = True  # Cached key exists
+                
+                # Configure mock to return our test key
+                mock_file = mock_open.return_value.__enter__.return_value
+                mock_file.read.return_value = test_key
+                
+                # Create manager
+                manager = EncryptionManager()
+                
+                # Should log that it loaded cached key
+                mock_logger.info.assert_any_call("Loaded cached development key from .env.dev-key")
+                
+                # Should use the cached key
+                encrypted = manager.encrypt("test data")
+                
+                # Create another manager instance (simulating restart)
+                mock_file.read.return_value = test_key
+                manager2 = EncryptionManager()
+                
+                # Should be able to decrypt with same key
+                decrypted = manager2.decrypt(encrypted)
+                assert decrypted == "test data"
     
     def test_valid_fernet_key_validation(self):
         """Test validation of Fernet key format"""
@@ -168,7 +225,8 @@ class TestDataMasking:
         assert mask_phone("   ") == "XXX-XXX-XXXX"  # Whitespace returns placeholder
     
     def test_mask_email(self):
-        """Test email masking"""
+        """Test email masking with email-validator"""
+        # Valid emails
         assert mask_email("john.doe@example.com") == "j*******@example.com"
         assert mask_email("j@example.com") == "j@example.com"  # Single char
         assert mask_email("admin@siphio.com") == "a****@siphio.com"
@@ -180,6 +238,16 @@ class TestDataMasking:
         assert mask_email("@example.com") == "****@****.***"  # No local part
         assert mask_email("test@") == "****@****.***"  # No domain
         assert mask_email("ab@example.com") == "a*@example.com"  # Two chars
+        
+        # International emails (if email-validator is installed)
+        try:
+            import email_validator
+            # These should work with email-validator
+            assert mask_email("user@café.com") in ["u***@café.com", "u***@xn--caf-dma.com"]  # IDN domain
+            assert mask_email("测试@example.com") == "测*@example.com"  # Unicode local part
+        except ImportError:
+            # If email-validator not installed, these get masked
+            pass
     
     def test_mask_name(self):
         """Test name masking"""

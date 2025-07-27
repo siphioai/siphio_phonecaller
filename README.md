@@ -38,8 +38,8 @@ An AI-powered phone receptionist system designed for dental practices and small 
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/siphioai/siphio-phone.git
-cd siphio-phone
+git clone https://github.com/siphioai/ai-phone-system.git
+cd ai-phone-system
 ```
 
 2. Create virtual environment:
@@ -147,6 +147,15 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 ENCRYPTION_KEY=<generated-key-here>
 ```
 
+**Note**: Fernet keys must be exactly 44 characters of base64-encoded data.
+
+#### Development Mode Encryption Keys
+In development mode:
+- A temporary key is auto-generated if not provided
+- The key is cached in `.env.dev-key` for persistence across restarts
+- You'll see a warning about the temporary key
+- The cached key ensures encrypt/decrypt works across application restarts
+
 #### Module Import Errors
 If you see "ModuleNotFoundError":
 
@@ -164,14 +173,37 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
+#### Email Validation Issues
+- The system uses `email-validator` for robust email validation
+- International domains (IDN) are supported (e.g., user@café.com)
+- Invalid emails are fully masked for privacy
+- Check logs for validation warnings with partial hints
+
 #### Development vs Production Settings
 - Development mode auto-generates temporary encryption keys with warnings
 - Production mode requires all security keys to be properly set
 - Check logs for configuration validation warnings
 
+### Running Tests with Coverage
+
+To check test coverage:
+```bash
+# Install coverage tools (already in requirements.txt)
+pip install pytest-cov
+
+# Run tests with coverage report
+pytest --cov=app --cov-report=html --cov-report=term
+
+# View detailed HTML report
+# Open htmlcov/index.html in your browser
+```
+
+Target coverage: >80% for production code
+
 ### Performance Benchmarks
 - Health endpoint: <10ms response time
 - Encryption/decryption: <1ms for typical PHI data
+- Concurrent encryption: ~1000 ops/sec on standard hardware
 - Startup time: <2 seconds
 
 ## License

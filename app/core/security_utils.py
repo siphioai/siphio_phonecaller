@@ -50,14 +50,40 @@ class EncryptionManager:
                     "Generate with: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
                 )
             else:
-                # Generate a temporary key for development
-                logger.warning(
-                    "Using temporary encryption key for development. "
-                    "For production, generate a key with: "
-                    "python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
-                )
-                key_str = Fernet.generate_key().decode()
-                logger.debug(f"Generated temporary key (first 8 chars): {key_str[:8]}...")
+                # Try to load cached dev key first
+                import os
+                dev_key_file = ".env.dev-key"
+                key_str = None
+                
+                if os.path.exists(dev_key_file):
+                    try:
+                        with open(dev_key_file, 'r') as f:
+                            cached_key = f.read().strip()
+                            if self._is_valid_fernet_key(cached_key):
+                                key_str = cached_key
+                                logger.info(f"Loaded cached development key from {dev_key_file}")
+                    except Exception as e:
+                        logger.warning(f"Failed to load cached dev key: {e}")
+                
+                if not key_str:
+                    # Generate a new temporary key for development
+                    key_str = Fernet.generate_key().decode()
+                    
+                    # Cache it for consistent behavior across restarts
+                    try:
+                        with open(dev_key_file, 'w') as f:
+                            f.write(key_str)
+                        logger.info(f"Cached development key to {dev_key_file}")
+                    except Exception as e:
+                        logger.warning(f"Failed to cache dev key: {e}")
+                    
+                    logger.warning(
+                        "Generated temporary encryption key for development (cached for this project). "
+                        "This key is saved in .env.dev-key and will persist across restarts. "
+                        "For production, generate a proper key with: "
+                        "python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
+                    )
+                    logger.debug(f"Generated temporary key (first 8 chars): {key_str[:8]}...")
         
         try:
             # Ensure key is valid
@@ -236,15 +262,27 @@ def mask_email(email: str) -> str:
     if not email:
         return "****@****.***"  # Placeholder for empty
     
-    # Basic email validation
-    email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
-    if not re.match(email_pattern, email):
-        # Not a valid email, mask completely
-        logger.warning(f"Invalid email format for masking: {email[:10]}...")
+    # Use email-validator for robust validation
+    # This handles international domains, IDN, and complex email formats
+    try:
+        from email_validator import validate_email, EmailNotValidError
+        
+        # Validate and normalize the email
+        validation = validate_email(email, check_deliverability=False)
+        normalized_email = validation.email
+        local, domain = normalized_email.split('@', 1)
+        
+    except (EmailNotValidError, ImportError) as e:
+        # Log warning with context about invalid email
+        # Include partial info for debugging while maintaining privacy
+        if len(email) > 3:
+            hint = f"{email[:2]}...{email[-1]}"
+        else:
+            hint = "***"
+        logger.warning(f"Invalid email format for masking (hint: {hint}): {str(e)[:50]}")
         return "****@****.***"
     
-    local, domain = email.split('@', 1)
-    
+    # Mask the local part based on length
     if len(local) == 1:
         # Single character local part
         return f"{local}@{domain}"

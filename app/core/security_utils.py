@@ -73,7 +73,9 @@ class EncryptionManager:
                     try:
                         with open(dev_key_file, 'w') as f:
                             f.write(key_str)
-                        logger.info(f"Cached development key to {dev_key_file}")
+                        # Set file permissions to owner-only (0o600)
+                        os.chmod(dev_key_file, 0o600)
+                        logger.info(f"Cached development key to {dev_key_file} with secure permissions")
                     except Exception as e:
                         logger.warning(f"Failed to cache dev key: {e}")
                     
@@ -279,7 +281,15 @@ def mask_email(email: str) -> str:
             hint = f"{email[:2]}...{email[-1]}"
         else:
             hint = "***"
-        logger.warning(f"Invalid email format for masking (hint: {hint}): {str(e)[:50]}")
+        # Sanitize the error message to remove any email content
+        error_msg = str(e)
+        if isinstance(e, EmailNotValidError) and email in error_msg:
+            # Replace the actual email with the hint in error message
+            error_msg = error_msg.replace(email, f"[email:{hint}]")
+        elif isinstance(e, ImportError):
+            # For import errors, just note the type
+            error_msg = "email_validator not installed"
+        logger.warning(f"Invalid email format for masking (hint: {hint}): {error_msg[:50]}")
         return "****@****.***"
     
     # Mask the local part based on length

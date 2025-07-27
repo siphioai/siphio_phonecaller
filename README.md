@@ -147,7 +147,7 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 ENCRYPTION_KEY=<generated-key-here>
 ```
 
-**Note**: Fernet keys must be exactly 44 characters of base64-encoded data.
+**Note**: Fernet keys must be exactly 44 characters of base64-encoded data. The example key in `.env.example` is for reference only - **never use it in production**. Always generate your own unique key.
 
 #### Development Mode Encryption Keys
 In development mode:

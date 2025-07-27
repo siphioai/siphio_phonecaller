@@ -243,11 +243,19 @@ class TestDataMasking:
         try:
             import email_validator
             # These should work with email-validator
-            assert mask_email("user@café.com") in ["u***@café.com", "u***@xn--caf-dma.com"]  # IDN domain
-            assert mask_email("测试@example.com") == "测*@example.com"  # Unicode local part
+            # Test IDN domain - allow for both normalized forms
+            masked_idn = mask_email("user@café.com")
+            assert masked_idn.startswith("u***@"), f"Expected u***@ prefix, got {masked_idn}"
+            assert ("café.com" in masked_idn or "xn--caf-dma.com" in masked_idn), f"Expected café.com or punycode, got {masked_idn}"
+            
+            # Test Unicode local part
+            masked_unicode = mask_email("测试@example.com")
+            assert masked_unicode.startswith("测*@"), f"Expected 测*@ prefix, got {masked_unicode}"
+            assert masked_unicode.endswith("@example.com"), f"Expected @example.com suffix, got {masked_unicode}"
         except ImportError:
             # If email-validator not installed, these get masked
-            pass
+            assert mask_email("user@café.com") == "****@****.***"
+            assert mask_email("测试@example.com") == "****@****.***"
     
     def test_mask_name(self):
         """Test name masking"""

@@ -11,13 +11,12 @@ from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse, Response
-from prometheus_client import Counter, Histogram, generate_latest
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.core.config import settings
 from app.core.security_utils import sanitize_log_data
 
-# Configure logging
+# Configure logging first
 logging.basicConfig(
     level=settings.LOG_LEVEL,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -26,6 +25,31 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+# Try to import prometheus_client, but make it optional for now
+try:
+    from prometheus_client import Counter, Histogram, generate_latest
+    PROMETHEUS_AVAILABLE = True
+except ImportError:
+    logger.warning("prometheus_client not installed. Metrics will be disabled.")
+    PROMETHEUS_AVAILABLE = False
+    # Create dummy classes to avoid errors
+    class Counter:
+        def __init__(self, *args, **kwargs):
+            pass
+        def labels(self, **kwargs):
+            return self
+        def inc(self):
+            pass
+    class Histogram:
+        def __init__(self, *args, **kwargs):
+            pass
+        def labels(self, **kwargs):
+            return self
+        def observe(self, value):
+            pass
+    def generate_latest():
+        return b"# Prometheus metrics disabled"
 
 # Prometheus metrics
 request_count = Counter(
@@ -244,9 +268,27 @@ async def root():
     }
 
 
-# Import and include routers (will be added as we build features)
-# from app.api import webhooks, admin, client
-# app.include_router(webhooks.router, prefix="/api/webhooks", tags=["Webhooks"])
+# Import and include routers
+from app.api import webhooks
+from app.core.websocket_manager import WebSocketManager
+
+# Initialize WebSocket manager
+websocket_manager = WebSocketManager()
+
+# Include API routers
+app.include_router(webhooks.router)
+
+# WebSocket endpoint for media streaming
+@app.websocket("/media-stream/{stream_id}")
+async def websocket_endpoint(websocket, stream_id: str):
+    """
+    WebSocket endpoint for Twilio media streaming
+    Handles real-time audio bidirectional communication
+    """
+    await websocket_manager.handle_media_stream(websocket, stream_id)
+
+# Admin and client routers will be added later
+# from app.api import admin, client
 # app.include_router(admin.router, prefix="/api/admin", tags=["Admin"])
 # app.include_router(client.router, prefix="/api/client", tags=["Client"])
 

@@ -72,7 +72,18 @@ For testing Twilio webhooks locally:
 
 1. Install ngrok: https://ngrok.com/download
 2. Run ngrok: `ngrok http 8000`
-3. Update your Twilio phone number webhook to the ngrok URL
+3. Update your Twilio phone number webhook settings:
+   - Voice & Fax → ACCEPT INCOMING VOICE CALLS
+   - Configure With: Webhooks, TwiML Bins, Functions, Studio, or Proxy
+   - A CALL COMES IN: Webhook → `https://your-ngrok-url.ngrok.io/api/webhooks/incoming-call` (HTTP POST)
+   - CALL STATUS CHANGES: `https://your-ngrok-url.ngrok.io/api/webhooks/call-status` (HTTP POST)
+
+4. Test the integration:
+```bash
+python test_twilio_integration.py
+```
+
+5. Make a test call to your Twilio phone number
 
 ## Configuration
 
@@ -90,9 +101,20 @@ Key environment variables (see `.env.example` for full list):
 
 ## API Endpoints
 
+### System Endpoints
 - `GET /health` - Health check endpoint
+- `GET /health/detailed` - Detailed health check with component status
+- `GET /metrics` - Prometheus metrics (development only)
 - `GET /docs` - Interactive API documentation (development only)
-- `POST /api/webhooks/incoming-call` - Twilio webhook for incoming calls
+
+### Twilio Webhooks
+- `POST /api/webhooks/incoming-call` - Handle incoming calls
+- `POST /api/webhooks/call-status` - Handle call status updates
+- `POST /api/webhooks/recording-status` - Handle recording status
+- `POST /api/webhooks/sms-status` - Handle SMS delivery status
+- `GET /api/webhooks/health` - Webhook service health check
+
+### WebSocket
 - `WebSocket /media-stream/{stream_id}` - Real-time audio streaming
 
 ## Security & Compliance

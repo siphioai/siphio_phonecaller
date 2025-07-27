@@ -5,7 +5,7 @@ Handles all environment variables and provides type-safe access
 import json
 import sys
 import warnings
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 from functools import lru_cache
 
 from pydantic import Field, field_validator, computed_field
@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     HOST: str = Field(default="0.0.0.0")
     PORT: int = Field(default=8000, ge=1, le=65535)
     WORKERS: int = Field(default=1, ge=1)
-    CORS_ORIGINS: str = Field(default='["http://localhost:3000", "http://localhost:8000"]')
+    CORS_ORIGINS: Union[str, List[str]] = Field(default='["http://localhost:3000", "http://localhost:8000"]')
     
     # Database
     DATABASE_URL: str = Field(default="postgresql+asyncpg://user:password@localhost:5432/siphio_phone")
@@ -77,6 +77,9 @@ class Settings(BaseSettings):
     TWILIO_PHONE_NUMBER: Optional[str] = Field(default=None)
     TWILIO_WEBHOOK_URL: Optional[str] = Field(default=None)
     TWILIO_STATUS_CALLBACK_URL: Optional[str] = Field(default=None)
+    TWILIO_VALIDATE_REQUESTS: bool = Field(default=True)  # Validate webhook signatures
+    WEBSOCKET_HOST: Optional[str] = Field(default=None)  # Override WebSocket host if needed
+    USE_HTTPS: bool = Field(default=True)  # Use WSS instead of WS
     
     # Deepgram Configuration
     DEEPGRAM_API_KEY: Optional[str] = Field(default=None)
@@ -109,7 +112,7 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_SECRET: Optional[str] = Field(default=None)
     GOOGLE_REDIRECT_URI: str = Field(default="http://localhost:8000/api/auth/google/callback")
     GOOGLE_CALENDAR_ID: str = Field(default="primary")
-    GOOGLE_OAUTH_SCOPES: str = Field(default='["https://www.googleapis.com/auth/calendar"]')
+    GOOGLE_OAUTH_SCOPES: Union[str, List[str]] = Field(default='["https://www.googleapis.com/auth/calendar"]')
     
     # Business Logic Settings
     APPOINTMENT_DURATION_MINUTES: int = Field(default=30, ge=15, le=120)
@@ -125,6 +128,7 @@ class Settings(BaseSettings):
     INTERRUPTION_THRESHOLD_MS: int = Field(default=500, ge=100, le=2000)
     MAX_RETRY_ATTEMPTS: int = Field(default=3, ge=1, le=10)
     DEFAULT_GREETING: str = Field(default="Thank you for calling. How may I help you today?")
+    MAX_RESPONSE_LATENCY: int = Field(default=1500, ge=500, le=3000)  # Target <1.5s latency
     
     # Monitoring & Alerting
     PROMETHEUS_METRICS_PATH: str = Field(default="/metrics")

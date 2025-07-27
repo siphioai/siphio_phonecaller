@@ -38,6 +38,7 @@ class WebSocketConnection:
         self.is_connected = False
         self.start_time = datetime.utcnow()
         self.tasks: Set[asyncio.Task] = set()
+        self._cleanup_called = False
     
     async def initialize(self):
         """
@@ -65,25 +66,55 @@ class WebSocketConnection:
         """
         Clean up resources for this connection
         """
+        # Prevent multiple cleanup calls
+        if self._cleanup_called:
+            return
+        self._cleanup_called = True
+        
         try:
+            # Mark as disconnected first
+            self.is_connected = False
+            
             # Cancel all running tasks
+            cancelled_tasks = []
             for task in self.tasks:
                 if not task.done():
                     task.cancel()
+                    cancelled_tasks.append(task)
             
-            # Wait for tasks to complete cancellation
-            if self.tasks:
-                await asyncio.gather(*self.tasks, return_exceptions=True)
+            # Wait for tasks to complete cancellation with timeout
+            if cancelled_tasks:
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*cancelled_tasks, return_exceptions=True),
+                        timeout=5.0
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(f"Timeout waiting for tasks to cancel for stream {self.stream_id}")
+            
+            # Clear audio buffer
+            if self.audio_buffer:
+                await self.audio_buffer.clear()
             
             # Disconnect services
             if self.deepgram_service:
-                await self.deepgram_service.disconnect()
+                try:
+                    await self.deepgram_service.disconnect()
+                except Exception as e:
+                    logger.error(f"Error disconnecting Deepgram service: {e}")
+                finally:
+                    self.deepgram_service = None
             
             if self.orchestrator:
-                await self.orchestrator.cleanup()
+                try:
+                    await self.orchestrator.cleanup()
+                except Exception as e:
+                    logger.error(f"Error cleaning up orchestrator: {e}")
+                finally:
+                    self.orchestrator = None
             
-            # Mark as disconnected
-            self.is_connected = False
+            # Clear task set
+            self.tasks.clear()
             
             # Log connection duration
             duration = (datetime.utcnow() - self.start_time).total_seconds()
@@ -91,6 +122,11 @@ class WebSocketConnection:
             
         except Exception as e:
             logger.error(f"Error during WebSocket cleanup: {e}", exc_info=True)
+    
+    def __del__(self):
+        """Ensure cleanup on garbage collection"""
+        if not self._cleanup_called and self.is_connected:
+            logger.warning(f"WebSocketConnection {self.stream_id} being garbage collected without cleanup")
 
 
 class WebSocketManager:
@@ -125,6 +161,12 @@ class WebSocketManager:
         connection = None
         
         try:
+            # Validate authentication
+            if not self._validate_stream_auth(stream_id, websocket):
+                logger.warning(f"Authentication failed for stream {stream_id}")
+                await websocket.close(code=1008, reason="Authentication failed")
+                return
+            
             # Check max connections before accepting
             async with self._lock:
                 if len(self.connections) >= self.max_connections:
@@ -187,10 +229,18 @@ class WebSocketManager:
             
             # Log which task completed first
             for task in done:
-                if task.exception():
-                    logger.error(f"Task {task.get_name()} failed: {task.exception()}")
-                else:
-                    logger.info(f"Task {task.get_name()} completed normally")
+                try:
+                    exc = task.exception()
+                    if exc:
+                        logger.error(f"Task {task.get_name()} failed: {exc}")
+                        # Re-raise critical exceptions
+                        if not isinstance(exc, (WebSocketDisconnect, asyncio.CancelledError)):
+                            raise exc
+                    else:
+                        logger.info(f"Task {task.get_name()} completed normally")
+                except asyncio.InvalidStateError:
+                    # Task was cancelled
+                    logger.info(f"Task {task.get_name()} was cancelled")
             
         except WebSocketDisconnect:
             logger.info(f"WebSocket disconnected for stream {stream_id}")
@@ -384,19 +434,88 @@ class WebSocketManager:
             connections_to_close = []
             
             async with self._lock:
-                for stream_id, conn in self.connections.items():
+                for stream_id, conn in list(self.connections.items()):
                     if conn.conversation_state.call_sid == call_sid:
-                        connections_to_close.append(stream_id)
+                        connections_to_close.append((stream_id, conn))
             
-            # Close connections
-            for stream_id in connections_to_close:
-                connection = self.connections.get(stream_id)
-                if connection and connection.websocket.client_state == WebSocketState.CONNECTED:
-                    await connection.websocket.close()
-                    logger.info(f"Closed WebSocket for call {call_sid}, stream {stream_id}")
+            # Close connections outside of lock to avoid deadlock
+            for stream_id, connection in connections_to_close:
+                try:
+                    # Close WebSocket if still connected
+                    if connection and connection.websocket.client_state == WebSocketState.CONNECTED:
+                        await connection.websocket.close()
+                        logger.info(f"Closed WebSocket for call {call_sid}, stream {stream_id}")
+                    
+                    # Ensure cleanup is called
+                    await connection.cleanup()
+                    
+                    # Remove from connections
+                    async with self._lock:
+                        self.connections.pop(stream_id, None)
+                        self.conversation_states.pop(stream_id, None)
+                        
+                except Exception as e:
+                    logger.error(f"Error closing connection {stream_id}: {e}")
             
         except Exception as e:
             logger.error(f"Error cleaning up call {call_sid}: {e}", exc_info=True)
+    
+    async def cleanup_stale_connections(self, max_age_seconds: int = 3600):
+        """
+        Clean up stale connections older than max_age_seconds
+        
+        Args:
+            max_age_seconds: Maximum age for a connection in seconds
+        """
+        try:
+            now = datetime.utcnow()
+            stale_connections = []
+            
+            async with self._lock:
+                for stream_id, conn in list(self.connections.items()):
+                    age = (now - conn.start_time).total_seconds()
+                    if age > max_age_seconds:
+                        stale_connections.append((stream_id, conn))
+            
+            # Clean up stale connections
+            for stream_id, connection in stale_connections:
+                logger.warning(f"Cleaning up stale connection {stream_id} (age: {age:.0f}s)")
+                try:
+                    await connection.cleanup()
+                    async with self._lock:
+                        self.connections.pop(stream_id, None)
+                        self.conversation_states.pop(stream_id, None)
+                except Exception as e:
+                    logger.error(f"Error cleaning up stale connection {stream_id}: {e}")
+                    
+        except Exception as e:
+            logger.error(f"Error cleaning up stale connections: {e}", exc_info=True)
+    
+    def _validate_stream_auth(self, stream_id: str, websocket: WebSocket) -> bool:
+        """
+        Validate authentication for WebSocket connection
+        
+        Args:
+            stream_id: The stream ID to validate
+            websocket: The WebSocket connection
+            
+        Returns:
+            True if authentication is valid, False otherwise
+        """
+        # Check if we have a stored conversation state for this stream
+        # This ensures the WebSocket connection is only accepted for valid calls
+        # that were initiated through the webhook
+        if stream_id not in self.conversation_states:
+            logger.warning(f"No conversation state found for stream {stream_id}")
+            return False
+        
+        # Additional validation can be added here:
+        # - Check if stream_id follows expected format
+        # - Validate against a time window (e.g., connection must happen within 30s of webhook)
+        # - Check client IP against expected Twilio IPs
+        
+        # For now, just validate that we have a conversation state
+        return True
     
     def is_healthy(self) -> bool:
         """
@@ -425,3 +544,4 @@ class WebSocketManager:
             "duration": (datetime.utcnow() - connection.start_time).total_seconds(),
             "latency_metrics": connection.latency_tracker.get_metrics()
         }
+    

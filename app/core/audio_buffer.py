@@ -247,22 +247,35 @@ class AudioBuffer:
             # Collect all remaining chunks
             remaining_chunks = []
             
-            # Add overflow buffer first
-            if self.overflow_buffer:
-                remaining_chunks.extend(self.overflow_buffer)
+            try:
+                # Add overflow buffer first
+                if self.overflow_buffer:
+                    remaining_chunks.extend(self.overflow_buffer)
+                    self.overflow_buffer.clear()
+                
+                # Add all buffered chunks
+                while self.buffer:
+                    audio_data, _ = self.buffer.popleft()
+                    remaining_chunks.append(audio_data)
+                    self.total_chunks_processed += 1
+                
+                if not remaining_chunks:
+                    return None
+                
+                logger.info(f"Flushing {len(remaining_chunks)} remaining audio chunks")
+                result = b''.join(remaining_chunks)
+                
+                # Clear the list to free memory
+                remaining_chunks.clear()
+                
+                return result
+            except Exception as e:
+                logger.error(f"Error flushing audio buffer: {e}")
+                # Clear buffers on error to prevent memory leak
+                self.buffer.clear()
                 self.overflow_buffer.clear()
-            
-            # Add all buffered chunks
-            while self.buffer:
-                audio_data, _ = self.buffer.popleft()
-                remaining_chunks.append(audio_data)
-                self.total_chunks_processed += 1
-            
-            if not remaining_chunks:
+                remaining_chunks.clear()
                 return None
-            
-            logger.info(f"Flushing {len(remaining_chunks)} remaining audio chunks")
-            return b''.join(remaining_chunks)
     
     async def clear(self):
         """Clear the buffer"""

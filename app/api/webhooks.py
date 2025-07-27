@@ -22,7 +22,7 @@ settings = get_settings()
 websocket_manager = WebSocketManager(max_connections=settings.MAX_CONCURRENT_CALLS)
 
 
-def validate_twilio_request(request: Request) -> bool:
+async def validate_twilio_request(request: Request) -> bool:
     """
     Validate that the request came from Twilio
     
@@ -32,12 +32,10 @@ def validate_twilio_request(request: Request) -> bool:
     Returns:
         True if request is valid from Twilio
     """
-    # Check if validation should be skipped (development mode with explicit flag)
-    if settings.IS_DEVELOPMENT and not settings.TWILIO_VALIDATE_REQUESTS:
-        # Only skip if explicitly disabled in dev mode
-        if settings.ENVIRONMENT == "development":
-            logger.warning("Skipping Twilio request validation in development mode (TWILIO_VALIDATE_REQUESTS=False)")
-            return True
+    if settings.ENVIRONMENT == "development":
+        # Skip validation in development for easier testing
+        logger.warning("Skipping Twilio validation in development mode")
+        return True
     
     validator = RequestValidator(settings.TWILIO_AUTH_TOKEN)
     
@@ -47,15 +45,24 @@ def validate_twilio_request(request: Request) -> bool:
     # Get the signature from headers
     signature = request.headers.get('X-Twilio-Signature', '')
     
-    # Get POST parameters
-    # Note: This assumes form data. Adjust if using JSON
-    params = dict(request.query_params)
+    # Get POST parameters from request body
+    try:
+        form_data = await request.form()
+        params = dict(form_data)
+    except Exception as e:
+        logger.error(f"Failed to parse form data for Twilio validation: {e}")
+        params = {}
     
     # Validate the request
     is_valid = validator.validate(url, params, signature)
     
     if not is_valid:
         logger.warning(f"Invalid Twilio request signature from {request.client.host}")
+        audit_log("security_alert", {
+            "type": "invalid_twilio_signature",
+            "client_ip": request.client.host,
+            "url": url
+        })
     
     return is_valid
 
@@ -110,7 +117,7 @@ async def handle_incoming_call(request: Request) -> Response:
     """
     try:
         # Validate request is from Twilio
-        if not validate_twilio_request(request):
+        if not await validate_twilio_request(request):
             raise HTTPException(status_code=403, detail="Invalid request signature")
         
         # Parse form data from Twilio
@@ -199,7 +206,7 @@ async def handle_call_status(request: Request) -> PlainTextResponse:
     """
     try:
         # Validate request
-        if not validate_twilio_request(request):
+        if not await validate_twilio_request(request):
             raise HTTPException(status_code=403, detail="Invalid request signature")
         
         # Parse form data
@@ -240,7 +247,7 @@ async def handle_recording_status(request: Request) -> PlainTextResponse:
     """
     try:
         # Validate request
-        if not validate_twilio_request(request):
+        if not await validate_twilio_request(request):
             raise HTTPException(status_code=403, detail="Invalid request signature")
         
         # Parse form data
@@ -273,7 +280,7 @@ async def handle_sms_status(request: Request) -> PlainTextResponse:
     """
     try:
         # Validate request
-        if not validate_twilio_request(request):
+        if not await validate_twilio_request(request):
             raise HTTPException(status_code=403, detail="Invalid request signature")
         
         # Parse form data

@@ -59,6 +59,26 @@ class Settings(BaseSettings):
     WORKERS: int = Field(default=1, ge=1)
     CORS_ORIGINS: Union[str, List[str]] = Field(default='["http://localhost:3000", "http://localhost:8000"]')
     
+    @field_validator('CORS_ORIGINS', mode='before')
+    @classmethod
+    def parse_cors_origins(cls, v):
+        """Parse CORS origins from string or list"""
+        if isinstance(v, str):
+            try:
+                # Try to parse as JSON
+                parsed = json.loads(v)
+                if isinstance(parsed, list):
+                    return parsed
+                else:
+                    return [str(parsed)]
+            except json.JSONDecodeError:
+                # If not JSON, treat as comma-separated list
+                return [origin.strip() for origin in v.split(',')]
+        elif isinstance(v, list):
+            return v
+        else:
+            return [str(v)]
+    
     # Database
     DATABASE_URL: str = Field(default="postgresql+asyncpg://user:password@localhost:5432/siphio_phone")
     DATABASE_POOL_SIZE: int = Field(default=20, ge=1)
@@ -194,19 +214,6 @@ class Settings(BaseSettings):
                 return f"{parts[0]}://:{self.REDIS_PASSWORD}@{parts[1].split('@')[-1]}"
         return self.REDIS_URL
     
-    # Field validators
-    @field_validator("CORS_ORIGINS", mode="before")
-    @classmethod
-    def parse_cors_origins(cls, v: Any) -> List[str]:
-        """Parse CORS origins from JSON string or list"""
-        if isinstance(v, str):
-            try:
-                return json.loads(v)
-            except json.JSONDecodeError:
-                return [v]  # Single origin as string
-        elif isinstance(v, list):
-            return v
-        return []
     
     @field_validator("GOOGLE_OAUTH_SCOPES", mode="before")
     @classmethod
@@ -214,12 +221,19 @@ class Settings(BaseSettings):
         """Parse OAuth scopes from JSON string or list"""
         if isinstance(v, str):
             try:
-                return json.loads(v)
+                # Try to parse as JSON
+                parsed = json.loads(v)
+                if isinstance(parsed, list):
+                    return parsed
+                else:
+                    return [str(parsed)]
             except json.JSONDecodeError:
-                return [v]  # Single scope as string
+                # If not JSON, treat as comma-separated list
+                return [scope.strip() for scope in v.split(',')]
         elif isinstance(v, list):
             return v
-        return []
+        else:
+            return [str(v)]
     
     def validate_production_settings(self) -> List[str]:
         """

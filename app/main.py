@@ -106,13 +106,81 @@ async def lifespan(app: FastAPI):
             logger.error("Invalid SECRET_KEY in production!")
             sys.exit(1)
     
-    # Initialize services (Redis, DB, etc.) here in the future
+    # Initialize services
+    redis_client = None
+    db_engine = None
+    
+    try:
+        # Initialize Redis connection
+        if settings.REDIS_URL:
+            try:
+                import redis.asyncio as redis
+                redis_client = await redis.from_url(
+                    settings.REDIS_URL,
+                    password=settings.REDIS_PASSWORD,
+                    decode_responses=settings.REDIS_DECODE_RESPONSES,
+                    max_connections=settings.REDIS_POOL_SIZE
+                )
+                # Test connection
+                await redis_client.ping()
+                logger.info("Redis connection established")
+                # Store in app state for access in routes
+                app.state.redis = redis_client
+            except ImportError:
+                logger.warning("Redis module not installed. Redis features disabled.")
+            except Exception as e:
+                logger.error(f"Failed to connect to Redis: {e}")
+                if settings.ENVIRONMENT == "production":
+                    raise
+        
+        # Initialize database connection
+        if settings.DATABASE_URL and not settings.DATABASE_URL.startswith("postgresql+asyncpg://user:password"):
+            try:
+                from sqlalchemy.ext.asyncio import create_async_engine
+                db_engine = create_async_engine(
+                    settings.DATABASE_URL,
+                    pool_size=settings.DATABASE_POOL_SIZE,
+                    max_overflow=settings.DATABASE_MAX_OVERFLOW,
+                    echo=settings.DATABASE_ECHO
+                )
+                # Test connection
+                from sqlalchemy import text
+                async with db_engine.connect() as conn:
+                    await conn.execute(text("SELECT 1"))
+                logger.info("Database connection established")
+                # Store in app state
+                app.state.db_engine = db_engine
+            except ImportError:
+                logger.warning("SQLAlchemy not installed. Database features disabled.")
+            except Exception as e:
+                logger.error(f"Failed to connect to database: {e}")
+                if settings.ENVIRONMENT == "production":
+                    raise
+    
+    except Exception as e:
+        logger.error(f"Service initialization failed: {e}")
+        if settings.ENVIRONMENT == "production":
+            raise
     
     yield
     
     # Shutdown
     logger.info("Shutting down application...")
-    # Cleanup connections here
+    
+    # Cleanup connections
+    try:
+        if redis_client:
+            await redis_client.close()
+            logger.info("Redis connection closed")
+    except Exception as e:
+        logger.error(f"Error closing Redis connection: {e}")
+    
+    try:
+        if db_engine:
+            await db_engine.dispose()
+            logger.info("Database connection closed")
+    except Exception as e:
+        logger.error(f"Error closing database connection: {e}")
 
 
 # Create FastAPI application
@@ -214,17 +282,42 @@ async def detailed_health_check() -> Dict[str, Any]:
         # In production, this should require authentication
         return {"error": "Detailed health check requires authentication"}
     
+    # Check component health
+    components = {
+        "api": "healthy",
+        "database": "not_configured",
+        "redis": "not_configured",
+        "twilio": "not_configured",
+    }
+    
+    # Check Redis health
+    if hasattr(app.state, 'redis') and app.state.redis:
+        try:
+            await app.state.redis.ping()
+            components["redis"] = "healthy"
+        except Exception as e:
+            components["redis"] = f"unhealthy: {str(e)}"
+    
+    # Check Database health
+    if hasattr(app.state, 'db_engine') and app.state.db_engine:
+        try:
+            from sqlalchemy import text
+            async with app.state.db_engine.connect() as conn:
+                await conn.execute(text("SELECT 1"))
+            components["database"] = "healthy"
+        except Exception as e:
+            components["database"] = f"unhealthy: {str(e)}"
+    
+    # Check Twilio configuration
+    if settings.TWILIO_ACCOUNT_SID and settings.TWILIO_AUTH_TOKEN:
+        components["twilio"] = "configured"
+    
     health_status = {
-        "status": "healthy",
+        "status": "healthy" if all(v in ["healthy", "configured", "not_configured"] for v in components.values()) else "degraded",
         "timestamp": datetime.utcnow().isoformat(),
         "version": settings.APP_VERSION,
         "environment": settings.ENVIRONMENT,
-        "components": {
-            "api": "healthy",
-            "database": "not_configured",  # Will be updated when DB is added
-            "redis": "not_configured",     # Will be updated when Redis is added
-            "twilio": "not_configured",    # Will be updated when Twilio is added
-        },
+        "components": components,
         "config": {
             "debug": settings.DEBUG,
             "hipaa_mode": settings.HIPAA_COMPLIANT_MODE,
@@ -270,10 +363,9 @@ async def root():
 
 # Import and include routers
 from app.api import webhooks
-from app.core.websocket_manager import WebSocketManager
 
-# Initialize WebSocket manager
-websocket_manager = WebSocketManager()
+# WebSocket manager is initialized in webhooks module
+from app.api.webhooks import websocket_manager
 
 # Include API routers
 app.include_router(webhooks.router)

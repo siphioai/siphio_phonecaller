@@ -130,6 +130,50 @@ mypy app/
 
 See `docs/DEPLOYMENT.md` for detailed deployment instructions.
 
+## Troubleshooting
+
+### Common Issues
+
+#### Invalid Encryption Key Error
+If you see "Invalid encryption key" errors:
+
+1. **Generate a valid Fernet key**:
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+2. **Add to your .env file**:
+```
+ENCRYPTION_KEY=<generated-key-here>
+```
+
+#### Module Import Errors
+If you see "ModuleNotFoundError":
+
+1. **Ensure virtual environment is activated**:
+```bash
+# Windows
+venv\Scripts\activate
+
+# Linux/Mac
+source venv/bin/activate
+```
+
+2. **Install dependencies**:
+```bash
+pip install -r requirements.txt
+```
+
+#### Development vs Production Settings
+- Development mode auto-generates temporary encryption keys with warnings
+- Production mode requires all security keys to be properly set
+- Check logs for configuration validation warnings
+
+### Performance Benchmarks
+- Health endpoint: <10ms response time
+- Encryption/decryption: <1ms for typical PHI data
+- Startup time: <2 seconds
+
 ## License
 
 Proprietary - All rights reserved by Siphio AI

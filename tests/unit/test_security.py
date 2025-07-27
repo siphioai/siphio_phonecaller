@@ -76,8 +76,48 @@ class TestEncryptionManager:
         mock_settings.IS_PRODUCTION = True
         mock_settings.ENCRYPTION_KEY = "your-encryption-key-here-change-in-production"
         
-        with pytest.raises(ValueError, match="Encryption key must be set in production"):
+        with pytest.raises(ValueError, match="Invalid encryption key in production"):
             EncryptionManager()
+    
+    @patch('app.core.config.settings')
+    @patch('app.core.security_utils.logger')
+    def test_development_key_generation(self, mock_logger, mock_settings):
+        """Test that development generates temporary key with warning"""
+        mock_settings.IS_PRODUCTION = False
+        mock_settings.ENCRYPTION_KEY = "your-encryption-key-here-change-in-production"
+        
+        # Should not raise an error in development
+        manager = EncryptionManager()
+        
+        # Should log warning about temporary key
+        mock_logger.warning.assert_called()
+        warning_message = mock_logger.warning.call_args[0][0]
+        assert "temporary encryption key" in warning_message
+        assert "Generate with:" in warning_message
+        
+        # Should be able to encrypt/decrypt with generated key
+        encrypted = manager.encrypt("test data")
+        decrypted = manager.decrypt(encrypted)
+        assert decrypted == "test data"
+    
+    def test_valid_fernet_key_validation(self):
+        """Test validation of Fernet key format"""
+        manager = EncryptionManager()
+        
+        # Valid key (44 chars, base64)
+        valid_key = "gAAAAABhvalid_key_here_that_is_44_chars_ok="
+        assert manager._is_valid_fernet_key(valid_key) is False  # Not actually valid base64
+        
+        # Generate real valid key
+        from cryptography.fernet import Fernet
+        real_key = Fernet.generate_key().decode()
+        assert manager._is_valid_fernet_key(real_key) is True
+        
+        # Invalid keys
+        assert manager._is_valid_fernet_key("") is False
+        assert manager._is_valid_fernet_key("short") is False
+        assert manager._is_valid_fernet_key("a" * 43) is False  # Too short
+        assert manager._is_valid_fernet_key("a" * 45) is False  # Too long
     
     def test_key_rotation(self):
         """Test encryption key rotation"""
@@ -115,21 +155,31 @@ class TestDataMasking:
         
         # Short numbers
         assert mask_phone("1234") == "1234"  # Too short to mask
-        assert mask_phone("") == ""
+        assert mask_phone("") == "XXX-XXX-XXXX"  # Fixed: returns placeholder
         
         # International format
         assert mask_phone("441234567890") == "XXXXXXXX7890"
         
         # Custom show_last parameter
         assert mask_phone("1234567890", show_last=2) == "XXXXXXXX90"
+        
+        # Edge cases
+        assert mask_phone("abc") == "XXX-XXX-XXXX"  # Non-digits return placeholder
+        assert mask_phone("   ") == "XXX-XXX-XXXX"  # Whitespace returns placeholder
     
     def test_mask_email(self):
         """Test email masking"""
         assert mask_email("john.doe@example.com") == "j*******@example.com"
-        assert mask_email("j@example.com") == "j@example.com"  # Single char not masked
+        assert mask_email("j@example.com") == "j@example.com"  # Single char
         assert mask_email("admin@siphio.com") == "a****@siphio.com"
-        assert mask_email("") == ""
-        assert mask_email("invalid-email") == "invalid-email"  # No @ symbol
+        assert mask_email("") == "****@****.***"  # Fixed: returns placeholder
+        assert mask_email("invalid-email") == "****@****.***"  # Fixed: invalid email masked
+        
+        # Edge cases
+        assert mask_email("no@at") == "****@****.***"  # Invalid format
+        assert mask_email("@example.com") == "****@****.***"  # No local part
+        assert mask_email("test@") == "****@****.***"  # No domain
+        assert mask_email("ab@example.com") == "a*@example.com"  # Two chars
     
     def test_mask_name(self):
         """Test name masking"""
@@ -300,6 +350,27 @@ class TestJWT:
             decode_jwt_token(token)
     
     @patch('app.core.config.settings')
+    def test_jwt_with_custom_expiration(self, mock_settings):
+        """Test JWT token with custom expiration"""
+        mock_settings.JWT_SECRET_KEY = "test-secret-key"
+        mock_settings.JWT_ALGORITHM = "HS256"
+        mock_settings.JWT_EXPIRATION_HOURS = 48
+        
+        # Create token with custom expiration
+        data = {"user_id": "456", "role": "user"}
+        token = create_jwt_token(data, expires_delta=timedelta(hours=72))
+        
+        # Decode and verify
+        decoded = decode_jwt_token(token)
+        assert decoded["user_id"] == "456"
+        assert decoded["role"] == "user"
+        
+        # Verify expiration is set correctly
+        iat = decoded["iat"]
+        exp = decoded["exp"]
+        assert (exp - iat) == 72 * 3600  # 72 hours in seconds
+    
+    @patch('app.core.config.settings')
     def test_invalid_jwt_token(self, mock_settings):
         """Test invalid JWT token"""
         mock_settings.JWT_SECRET_KEY = "test-secret-key"
@@ -442,3 +513,36 @@ class TestAuditLogging:
         assert "User: user123" in log_message
         assert "Status: FAILED" in log_message
         assert "Error: Test error" in log_message
+    
+    @patch('app.core.config.settings')
+    @patch('app.core.security_utils.logger')
+    def test_audit_log_disabled(self, mock_logger, mock_settings):
+        """Test audit logging when disabled"""
+        mock_settings.AUDIT_LOG_ENABLED = False
+        
+        @audit_log("test_action")
+        def test_function(user_id: str):
+            return "success"
+        
+        result = test_function(user_id="user123")
+        
+        assert result == "success"
+        # Should not log when disabled
+        mock_logger.info.assert_not_called()
+    
+    @patch('app.core.config.settings')
+    @patch('app.core.security_utils.logger')
+    def test_audit_log_anonymous_user(self, mock_logger, mock_settings):
+        """Test audit logging with anonymous user"""
+        mock_settings.AUDIT_LOG_ENABLED = True
+        
+        @audit_log("test_action")
+        def test_function():
+            return "success"
+        
+        result = test_function()
+        
+        assert result == "success"
+        mock_logger.info.assert_called()
+        log_message = mock_logger.info.call_args[0][0]
+        assert "User: anonymous" in log_message

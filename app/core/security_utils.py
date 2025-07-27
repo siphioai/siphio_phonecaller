@@ -42,23 +42,51 @@ class EncryptionManager:
         """
         key_str = key or settings.ENCRYPTION_KEY
         
-        # Validate key format
-        if key_str == "your-encryption-key-here-change-in-production":
+        # Handle default/invalid keys
+        if key_str == "your-encryption-key-here-change-in-production" or not self._is_valid_fernet_key(key_str):
             if settings.IS_PRODUCTION:
-                raise ValueError("Encryption key must be set in production")
+                raise ValueError(
+                    "Invalid encryption key in production. "
+                    "Generate with: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
+                )
             else:
                 # Generate a temporary key for development
-                logger.warning("Using temporary encryption key for development")
+                logger.warning(
+                    "Using temporary encryption key for development. "
+                    "For production, generate a key with: "
+                    "python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
+                )
                 key_str = Fernet.generate_key().decode()
+                logger.debug(f"Generated temporary key (first 8 chars): {key_str[:8]}...")
         
         try:
             # Ensure key is valid
             self.fernet = Fernet(key_str.encode() if isinstance(key_str, str) else key_str)
         except Exception as e:
-            raise ValueError(f"Invalid encryption key: {e}")
+            raise ValueError(f"Invalid encryption key format: {e}")
         
         # Track encryption operations for audit
         self.operation_count = 0
+    
+    def _is_valid_fernet_key(self, key_str: str) -> bool:
+        """
+        Validate if a string is a valid Fernet key
+        
+        Args:
+            key_str: Key string to validate
+            
+        Returns:
+            True if valid Fernet key format
+        """
+        try:
+            # Fernet keys are 32 bytes (44 chars base64 encoded)
+            if not key_str or len(key_str) != 44:
+                return False
+            # Try to create a Fernet instance
+            Fernet(key_str.encode() if isinstance(key_str, str) else key_str)
+            return True
+        except Exception:
+            return False
     
     def encrypt(self, data: Union[str, bytes]) -> str:
         """
@@ -170,10 +198,13 @@ def mask_phone(phone: str, show_last: int = 4) -> str:
         Masked phone number (e.g., "XXX-XXX-1234")
     """
     if not phone:
-        return ""
+        return "XXX-XXX-XXXX"  # Return placeholder for empty
     
     # Remove non-digit characters
     digits_only = re.sub(r'\D', '', phone)
+    
+    if not digits_only:
+        return "XXX-XXX-XXXX"  # Return placeholder for non-digit input
     
     if len(digits_only) <= show_last:
         return phone  # Don't mask if too short
@@ -202,17 +233,28 @@ def mask_email(email: str) -> str:
     Returns:
         Masked email (e.g., "j****@example.com")
     """
-    if not email or '@' not in email:
-        return email
+    if not email:
+        return "****@****.***"  # Placeholder for empty
+    
+    # Basic email validation
+    email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    if not re.match(email_pattern, email):
+        # Not a valid email, mask completely
+        logger.warning(f"Invalid email format for masking: {email[:10]}...")
+        return "****@****.***"
     
     local, domain = email.split('@', 1)
     
-    if len(local) <= 1:
-        return email  # Don't mask single character
-    
-    # Show first character and mask the rest
-    masked_local = local[0] + '*' * (len(local) - 1)
-    return f"{masked_local}@{domain}"
+    if len(local) == 1:
+        # Single character local part
+        return f"{local}@{domain}"
+    elif len(local) == 2:
+        # Two character local part
+        return f"{local[0]}*@{domain}"
+    else:
+        # Show first character and mask the rest
+        masked_local = local[0] + '*' * (len(local) - 1)
+        return f"{masked_local}@{domain}"
 
 
 def mask_name(name: str) -> str:
@@ -324,12 +366,17 @@ def generate_secure_token(length: int = 32) -> str:
     return ''.join(secrets.choice(alphabet) for _ in range(length))
 
 
+# NOTE: API key generation with checksums - may be over-engineered for MVP
+# Consider using simple UUID tokens initially
 def generate_api_key() -> str:
     """
     Generate a secure API key with checksum
     
     Returns:
         API key in format: sk_live_<random>_<checksum>
+    
+    Note: This implementation includes checksums for extra security.
+    For MVP, consider using simple UUID: str(uuid.uuid4())
     """
     # Generate random part
     random_part = generate_secure_token(32)
@@ -352,6 +399,9 @@ def verify_api_key(api_key: str) -> bool:
         
     Returns:
         True if valid, False otherwise
+    
+    Note: Checksum verification adds security but may be unnecessary for MVP.
+    Consider simple string comparison initially.
     """
     try:
         parts = api_key.split('_')
@@ -373,6 +423,8 @@ def verify_api_key(api_key: str) -> bool:
 
 
 # JWT Token Management
+# NOTE: JWT implementation may be over-engineered for MVP
+# Consider using simple session tokens with Redis initially
 def create_jwt_token(
     data: Dict[str, Any],
     expires_delta: Optional[timedelta] = None
@@ -386,6 +438,9 @@ def create_jwt_token(
         
     Returns:
         Encoded JWT token
+    
+    Note: For MVP, consider using simple session tokens stored in Redis
+    instead of JWT for easier implementation and revocation.
     """
     to_encode = data.copy()
     

@@ -3,11 +3,28 @@ Application configuration using Pydantic Settings
 Handles all environment variables and provides type-safe access
 """
 import json
+import sys
+import warnings
 from typing import List, Optional, Dict, Any
 from functools import lru_cache
 
 from pydantic import Field, field_validator, computed_field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Handle pydantic-settings import with fallback
+try:
+    from pydantic_settings import BaseSettings, SettingsConfigDict
+except ImportError:
+    warnings.warn(
+        "pydantic-settings not installed. Please install with: pip install pydantic-settings",
+        ImportWarning
+    )
+    # Fallback to basic pydantic BaseSettings if available
+    try:
+        from pydantic import BaseSettings
+        SettingsConfigDict = dict  # Basic dict as fallback
+    except ImportError:
+        print("ERROR: pydantic is required. Please install dependencies: pip install -r requirements.txt")
+        sys.exit(1)
 
 
 class Settings(BaseSettings):

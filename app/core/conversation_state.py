@@ -26,13 +26,50 @@ class CallStatus(Enum):
 class ConversationIntent(Enum):
     """Detected conversation intents"""
     UNKNOWN = "unknown"
+    # Appointment-related
     BOOKING_APPOINTMENT = "booking_appointment"
     CANCELING_APPOINTMENT = "canceling_appointment"
     RESCHEDULING_APPOINTMENT = "rescheduling_appointment"
+    # Dental-specific
+    CLEANING_INQUIRY = "cleaning_inquiry"
+    ROOT_CANAL_INQUIRY = "root_canal_inquiry"
+    CROWN_INQUIRY = "crown_inquiry"
+    FILLING_INQUIRY = "filling_inquiry"
+    EXTRACTION_INQUIRY = "extraction_inquiry"
+    ORTHODONTICS_INQUIRY = "orthodontics_inquiry"
+    COSMETIC_INQUIRY = "cosmetic_inquiry"
+    # General
     GENERAL_INQUIRY = "general_inquiry"
+    INSURANCE_INQUIRY = "insurance_inquiry"
+    PRICING_INQUIRY = "pricing_inquiry"
+    HOURS_INQUIRY = "hours_inquiry"
+    LOCATION_INQUIRY = "location_inquiry"
+    # Urgent/Special
     EMERGENCY = "emergency"
+    PAIN_COMPLAINT = "pain_complaint"
     COMPLAINT = "complaint"
     FEEDBACK = "feedback"
+    
+    def to_dict(self) -> dict:
+        """Convert intent to dictionary for serialization"""
+        return {
+            "value": self.value,
+            "name": self.name,
+            "category": self._get_category()
+        }
+    
+    def _get_category(self) -> str:
+        """Get intent category"""
+        if "appointment" in self.value:
+            return "appointment"
+        elif "inquiry" in self.value and self.value != "general_inquiry":
+            return "dental_service"
+        elif self in [self.EMERGENCY, self.PAIN_COMPLAINT]:
+            return "urgent"
+        elif self in [self.COMPLAINT, self.FEEDBACK]:
+            return "feedback"
+        else:
+            return "general"
 
 
 @dataclass

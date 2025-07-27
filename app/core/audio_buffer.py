@@ -5,7 +5,7 @@ Handles buffering of audio chunks for real-time STT processing
 import asyncio
 import logging
 from collections import deque
-from typing import Optional, Deque, Tuple
+from typing import Optional, Deque, Tuple, List
 import struct
 import numpy as np
 
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 class AudioBuffer:
     """
     Manages audio buffering for real-time streaming
-    Handles chunk aggregation and silence detection
+    Handles chunk aggregation and silence detection with VAD
     """
     
     def __init__(
@@ -24,7 +24,8 @@ class AudioBuffer:
         chunk_duration_ms: int = 20,  # 20ms chunks from Twilio
         buffer_duration_ms: int = 200,  # Buffer 200ms before sending to STT
         silence_threshold: float = 0.01,  # Silence detection threshold
-        max_buffer_size: int = 100  # Maximum number of chunks to buffer
+        max_buffer_size: int = 100,  # Maximum number of chunks to buffer
+        vad_enabled: bool = True  # Enable Voice Activity Detection
     ):
         """
         Initialize audio buffer
@@ -35,44 +36,52 @@ class AudioBuffer:
             buffer_duration_ms: Target buffer duration before processing
             silence_threshold: RMS threshold for silence detection
             max_buffer_size: Maximum buffer size to prevent memory issues
+            vad_enabled: Enable Voice Activity Detection
         """
         self.sample_rate = sample_rate
         self.chunk_duration_ms = chunk_duration_ms
         self.buffer_duration_ms = buffer_duration_ms
         self.silence_threshold = silence_threshold
         self.max_buffer_size = max_buffer_size
+        self.vad_enabled = vad_enabled
         
         # Calculate samples per chunk
         self.samples_per_chunk = int(sample_rate * chunk_duration_ms / 1000)
         self.chunks_per_buffer = int(buffer_duration_ms / chunk_duration_ms)
         
-        # Audio buffer
+        # Audio buffer with overflow protection
         self.buffer: Deque[Tuple[bytes, int]] = deque(maxlen=max_buffer_size)
-        self.current_chunks: Deque[bytes] = deque()
+        self.overflow_buffer: List[bytes] = []  # Store remnants between calls
         
         # State tracking
         self.total_chunks_received = 0
         self.total_chunks_processed = 0
         self.is_speech_active = False
         self.silence_chunks = 0
+        self.consecutive_speech_chunks = 0
         
         # Thread safety
         self._lock = asyncio.Lock()
         
         logger.info(
             f"AudioBuffer initialized: {sample_rate}Hz, {chunk_duration_ms}ms chunks, "
-            f"{buffer_duration_ms}ms buffer"
+            f"{buffer_duration_ms}ms buffer, VAD={'enabled' if vad_enabled else 'disabled'}"
         )
     
     async def add(self, audio_data: bytes, timestamp: int):
         """
-        Add audio chunk to buffer
+        Add audio chunk to buffer with overflow handling
         
         Args:
             audio_data: Raw audio bytes
             timestamp: Timestamp or sequence number
         """
         async with self._lock:
+            # Handle any overflow from previous operations
+            if self.overflow_buffer:
+                audio_data = b''.join(self.overflow_buffer) + audio_data
+                self.overflow_buffer.clear()
+            
             self.buffer.append((audio_data, timestamp))
             self.total_chunks_received += 1
             
@@ -177,7 +186,7 @@ class AudioBuffer:
     
     def _is_silence(self, audio_data: bytes) -> bool:
         """
-        Detect if audio chunk contains silence
+        Detect if audio chunk contains silence using energy-based VAD
         
         Args:
             audio_data: Audio bytes to check
@@ -185,38 +194,93 @@ class AudioBuffer:
         Returns:
             True if audio is silence
         """
+        if not self.vad_enabled:
+            return False
+            
         try:
-            # Convert bytes to numpy array (assuming 16-bit PCM)
-            # If audio is 8-bit μ-law, it should be converted to PCM first
-            audio_array = np.frombuffer(audio_data, dtype=np.int16)
+            # Handle empty data
+            if not audio_data or len(audio_data) == 0:
+                return False
             
-            # Calculate RMS (Root Mean Square)
-            rms = np.sqrt(np.mean(audio_array.astype(float) ** 2))
+            # Convert bytes to numpy array
+            # Note: Twilio sends μ-law encoded audio, needs conversion
+            audio_array = np.frombuffer(audio_data, dtype=np.uint8)
             
-            # Normalize RMS (16-bit audio max value is 32767)
-            normalized_rms = rms / 32767.0
+            # Handle arrays with no data
+            if len(audio_array) == 0:
+                return False
             
-            return normalized_rms < self.silence_threshold
+            # Simple energy-based VAD
+            # Calculate energy (sum of squares)
+            energy = np.sum(audio_array.astype(float) ** 2) / len(audio_array)
+            
+            # Normalize energy (8-bit audio max value is 255)
+            normalized_energy = energy / (255.0 ** 2)
+            
+            # Update speech state with hysteresis
+            is_silence = normalized_energy < self.silence_threshold
+            
+            # Add hysteresis to prevent rapid state changes
+            if is_silence:
+                self.consecutive_speech_chunks = 0
+            else:
+                self.consecutive_speech_chunks += 1
+            
+            # Ensure we return a Python bool, not numpy bool
+            return bool(is_silence)
             
         except Exception as e:
             logger.error(f"Error in silence detection: {e}")
             return False
     
+    async def flush(self) -> Optional[bytes]:
+        """
+        Flush any remaining audio data in buffer
+        
+        Returns:
+            Remaining audio bytes or None if buffer is empty
+        """
+        async with self._lock:
+            if not self.buffer and not self.overflow_buffer:
+                return None
+            
+            # Collect all remaining chunks
+            remaining_chunks = []
+            
+            # Add overflow buffer first
+            if self.overflow_buffer:
+                remaining_chunks.extend(self.overflow_buffer)
+                self.overflow_buffer.clear()
+            
+            # Add all buffered chunks
+            while self.buffer:
+                audio_data, _ = self.buffer.popleft()
+                remaining_chunks.append(audio_data)
+                self.total_chunks_processed += 1
+            
+            if not remaining_chunks:
+                return None
+            
+            logger.info(f"Flushing {len(remaining_chunks)} remaining audio chunks")
+            return b''.join(remaining_chunks)
+    
     async def clear(self):
         """Clear the buffer"""
         async with self._lock:
             self.buffer.clear()
-            self.current_chunks.clear()
+            self.overflow_buffer.clear()
             self.silence_chunks = 0
             self.is_speech_active = False
+            self.consecutive_speech_chunks = 0
             logger.debug("Audio buffer cleared")
     
     def clear_sync(self):
         """Synchronous version of clear"""
         self.buffer.clear()
-        self.current_chunks.clear()
+        self.overflow_buffer.clear()
         self.silence_chunks = 0
         self.is_speech_active = False
+        self.consecutive_speech_chunks = 0
     
     async def get_stats(self) -> dict:
         """

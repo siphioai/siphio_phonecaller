@@ -123,6 +123,7 @@ class Settings(BaseSettings):
     MAX_FUTURE_BOOKING_DAYS: int = Field(default=60, ge=1, le=365)
     
     # Call Handling Settings
+    MAX_CONCURRENT_CALLS: int = Field(default=50, ge=1, le=1000)  # Max concurrent WebSocket connections
     MAX_CALL_DURATION_SECONDS: int = Field(default=600, ge=60, le=3600)  # 1 min to 1 hour
     SILENCE_THRESHOLD_MS: int = Field(default=2000, ge=500, le=5000)
     INTERRUPTION_THRESHOLD_MS: int = Field(default=500, ge=100, le=2000)

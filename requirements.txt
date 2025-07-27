@@ -24,10 +24,10 @@ sqlalchemy==2.0.23
 
 # Redis
 redis==5.0.1
-hiredis==2.2.3
+hiredis==2.3.2
 
 # External Services (will be needed soon)
-twilio==8.10.0
+twilio==8.11.0
 # deepgram-sdk==3.0.0  # Uncomment when implementing STT
 # anthropic==0.7.8  # Uncomment when implementing Claude
 # elevenlabs==0.2.27  # Uncomment when implementing TTS
@@ -44,6 +44,7 @@ python-json-logger==2.0.7
 tenacity==8.2.3
 pytz==2023.3.post1
 email-validator==2.1.0  # Optional: For advanced international email validation
+numpy==1.26.2  # For audio processing and VAD
 
 # Testing
 pytest==7.4.3
@@ -52,6 +53,7 @@ pytest-cov==4.1.0
 pytest-mock==3.12.0
 httpx-mock==0.4.0
 faker==20.1.0
+locust==2.17.0  # For load testing
 
 # Development Tools
 black==23.12.0

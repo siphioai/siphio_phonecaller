@@ -97,10 +97,11 @@ class WebSocketManager:
     """
     Manages WebSocket connections for all active calls
     """
-    def __init__(self):
+    def __init__(self, max_connections: int = 50):
         self.connections: Dict[str, WebSocketConnection] = {}
         self.conversation_states: Dict[str, ConversationState] = {}
         self._lock = asyncio.Lock()
+        self.max_connections = max_connections
     
     async def store_conversation_state(self, stream_id: str, state: ConversationState):
         """
@@ -124,6 +125,15 @@ class WebSocketManager:
         connection = None
         
         try:
+            # Check max connections before accepting
+            async with self._lock:
+                if len(self.connections) >= self.max_connections:
+                    logger.warning(
+                        f"Max connections reached ({self.max_connections}), rejecting stream {stream_id}"
+                    )
+                    await websocket.close(code=1008, reason="Server at capacity")
+                    return
+            
             # Accept WebSocket connection
             await websocket.accept()
             logger.info(f"WebSocket connection accepted for stream {stream_id}")
@@ -132,7 +142,7 @@ class WebSocketManager:
             conversation_state = await self.get_conversation_state(stream_id)
             if not conversation_state:
                 logger.error(f"No conversation state found for stream {stream_id}")
-                await websocket.close(code=1008, reason="No conversation state")
+                await websocket.close(code=1011, reason="Invalid state")
                 return
             
             # Create connection object
@@ -140,6 +150,13 @@ class WebSocketManager:
             
             # Store connection
             async with self._lock:
+                # Double-check capacity under lock
+                if len(self.connections) >= self.max_connections:
+                    logger.warning(
+                        f"Max connections reached during race condition, rejecting stream {stream_id}"
+                    )
+                    await websocket.close(code=1008, reason="Server at capacity")
+                    return
                 self.connections[stream_id] = connection
             
             # Initialize connection services
@@ -229,8 +246,15 @@ class WebSocketManager:
                     connection.conversation_state.twilio_stream_sid = stream_sid
                     
                 elif data.get('event') == 'stop':
-                    # Stream stopped
+                    # Stream stopped - flush any remaining audio
                     logger.info(f"Media stream stopped for {connection.stream_id}")
+                    
+                    # Flush remaining audio in buffer
+                    remaining_audio = await connection.audio_buffer.flush()
+                    if remaining_audio and connection.deepgram_service:
+                        await connection.deepgram_service.send_audio(remaining_audio)
+                        logger.info(f"Flushed {len(remaining_audio)} bytes of remaining audio")
+                    
                     connection.is_connected = False
                     break
                     

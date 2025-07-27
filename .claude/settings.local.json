@@ -7,7 +7,16 @@
       "Bash(git config:*)",
       "Bash(mkdir:*)",
       "Bash(touch:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(git remote add:*)",
+      "Bash(pip install:*)",
+      "Bash(cp:*)",
+      "Bash(ngrok.exe:*)",
+      "Bash(start ngrok.exe http 8000)",
+      "Bash(curl:*)",
+      "Bash(rm:*)",
+      "Bash(git reset:*)",
+      "Bash(git push:*)"
     ],
     "deny": []
   }

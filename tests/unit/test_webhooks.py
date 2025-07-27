@@ -36,17 +36,13 @@ class TestWebhookEndpoints:
     
     @patch('app.api.webhooks.validate_twilio_request')
     @patch('app.api.webhooks.websocket_manager')
-    def test_incoming_call_success(self, mock_ws_manager, mock_validate, client, twilio_form_data):
+    async def test_incoming_call_success(self, mock_ws_manager, mock_validate, client, twilio_form_data):
         """Test successful incoming call webhook"""
         # Mock validation
         mock_validate.return_value = True
         
-        # Mock WebSocket manager
-        # Use create_future to make a coroutine that returns immediately
-        import asyncio
-        future = asyncio.Future()
-        future.set_result(None)
-        mock_ws_manager.store_conversation_state = MagicMock(return_value=future)
+        # Mock WebSocket manager with proper async mock
+        mock_ws_manager.store_conversation_state = AsyncMock(return_value=None)
         
         # Make request
         response = client.post(

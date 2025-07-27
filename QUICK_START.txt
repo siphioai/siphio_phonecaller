@@ -1,0 +1,58 @@
+SIPHIO PHONE SYSTEM - QUICK START GUIDE
+=======================================
+
+STEP 1: UPDATE YOUR AUTH TOKEN
+------------------------------
+1. Open .env file in this folder
+2. Find the line: TWILIO_AUTH_TOKEN="REPLACE_WITH_NEW_TOKEN_AFTER_REGENERATING"
+3. Replace with your actual auth token from Twilio
+
+STEP 2: START NGROK
+-------------------
+1. Double-click "start_ngrok.bat" in this folder
+2. A black window will open showing ngrok
+3. Look for a line like:
+   Forwarding    https://abc123.ngrok-free.app -> http://localhost:8000
+4. Copy the HTTPS URL (the part before ->)
+5. KEEP THIS WINDOW OPEN!
+
+STEP 3: UPDATE TWILIO CONFIGURATION
+-----------------------------------
+1. Open a NEW command prompt (don't close ngrok!)
+2. Navigate to this folder:
+   cd C:\Users\marley\siphio_phone
+3. Run:
+   python update_twilio_config.py https://YOUR-NGROK-URL.ngrok-free.app
+   (Replace YOUR-NGROK-URL with the URL from step 2)
+
+STEP 4: START THE SERVER
+------------------------
+In the same command prompt:
+1. Activate virtual environment:
+   venv\Scripts\activate
+2. Start the server:
+   uvicorn app.main:app --reload
+
+STEP 5: TEST YOUR SETUP
+-----------------------
+1. The server should show:
+   INFO: Application startup complete.
+   INFO: Uvicorn running on http://0.0.0.0:8000
+
+2. Call your Twilio number: +441615243042
+3. You should hear: "Thank you for calling. How may I assist you today?"
+
+TROUBLESHOOTING
+---------------
+- If ngrok closes, just run start_ngrok.bat again
+- If you get "Invalid signature" errors, make sure TWILIO_VALIDATE_REQUESTS=False in .env
+- Check server logs for any error messages
+
+MONITORING
+----------
+Watch for these in the server window:
+- "Incoming call: CA..." - Call received
+- "WebSocket connection accepted" - Audio streaming started
+- "Media stream started" - Audio is flowing
+
+Need help? Check TWILIO_SETUP_GUIDE.md for detailed instructions.

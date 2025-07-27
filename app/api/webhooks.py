@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/webhooks", tags=["webhooks"])
 
 settings = get_settings()
-websocket_manager = WebSocketManager()
+websocket_manager = WebSocketManager(max_connections=settings.MAX_CONCURRENT_CALLS)
 
 
 def validate_twilio_request(request: Request) -> bool:
@@ -32,10 +32,12 @@ def validate_twilio_request(request: Request) -> bool:
     Returns:
         True if request is valid from Twilio
     """
+    # Check if validation should be skipped (development mode with explicit flag)
     if settings.IS_DEVELOPMENT and not settings.TWILIO_VALIDATE_REQUESTS:
-        # Skip validation in development for easier testing
-        logger.warning("Skipping Twilio request validation in development mode")
-        return True
+        # Only skip if explicitly disabled in dev mode
+        if settings.ENVIRONMENT == "development":
+            logger.warning("Skipping Twilio request validation in development mode (TWILIO_VALIDATE_REQUESTS=False)")
+            return True
     
     validator = RequestValidator(settings.TWILIO_AUTH_TOKEN)
     
@@ -56,6 +58,41 @@ def validate_twilio_request(request: Request) -> bool:
         logger.warning(f"Invalid Twilio request signature from {request.client.host}")
     
     return is_valid
+
+
+def create_twiml_response(
+    greeting: Optional[str] = None,
+    websocket_url: Optional[str] = None,
+    voice: str = 'alice',
+    language: str = 'en-US'
+) -> str:
+    """
+    Create a TwiML response with proper defaults
+    
+    Args:
+        greeting: Optional greeting message
+        websocket_url: Optional WebSocket URL for streaming
+        voice: Voice to use for speech (default: alice)
+        language: Language for speech (default: en-US)
+        
+    Returns:
+        TwiML XML string
+    """
+    response = VoiceResponse()
+    
+    # Use default greeting if none provided
+    if greeting is None:
+        greeting = "Thank you for calling. How may I assist you today?"
+    
+    # Say greeting
+    response.say(greeting, voice=voice, language=language)
+    
+    # Add stream if URL provided
+    if websocket_url:
+        stream = Stream(url=websocket_url)
+        response.append(stream)
+    
+    return str(response)
 
 
 @router.post("/incoming-call")
